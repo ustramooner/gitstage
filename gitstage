@@ -1,0 +1,210 @@
+#!/bin/bash
+#helps when you need to stage commits into different commits
+
+TOPLEVEL="$(git rev-parse --show-toplevel)"
+[ $? -ne 0 ] && exit 1
+
+function help {
+  echo "$0 [option] <staging area name>"
+  echo "   -d deletes the staging area tag"
+  echo "   --help prints this"
+  echo ""
+  echo "   Run without arguments to get a list of staging areas"
+  echo "   Items marked with * are on the current branch"
+}
+
+if [ "$1" == "--help" ]; then
+  help
+  exit 0
+elif [ "$1" == "-d" ]; then
+  shift
+  GITSTAGE_NAME="$1"
+  if [ "" == "$GITSTAGE_NAME" ]; then
+    help
+    exit 1
+  else
+    git tag -l "stage-$GITSTAGE_NAME" | grep -E "^stage-$GITSTAGE_NAME\$" >/dev/null
+    if [ $? -ne 0 ]; then
+      echo "No such staging area"
+      exit 1
+    fi
+    git tag -d "stage-$GITSTAGE_NAME"
+    rm $TOPLEVEL/.git/gitstages/$GITSTAGE_NAME.msg 2>/dev/null
+    exit
+  fi
+fi
+
+
+GITSTAGE_NAME="$1"
+
+#echo "TOPLEVEL=$TOPLEVEL"
+#echo "GITSTAGE_NAME: $GITSTAGE_NAME"
+#echo ""
+#echo ""
+
+function displayStages {
+  # echo "Staged commits:"
+  
+  git tag -l 'stage-*' | grep -E '^stage-' | sed 's/^stage-//' |while read line; do
+    REV=$(git rev-list stage-$line~1..stage-$line)
+    git rev-list HEAD | grep -E "^$REV\$" >/dev/null
+    if [ $? -eq 0 ]; then
+      echo "* $line"
+    else
+      echo "  $line"
+    fi
+  
+  done
+}
+
+function hasTag {
+  git tag -l "stage-$1" | grep -E "^stage-$1\$" >/dev/null
+  return $?
+}
+
+function storeStaged {
+  #echo "Storing staging area '$GITSTAGE_NAME'"
+  rm $TOPLEVEL/.git/gitstages/$GITSTAGE_NAME.msg 2>/dev/null
+  git status --porcelain | grep -E '^[A-Z]+'  
+  if [ $? -ne 0 ]; then
+    #echo "Nothing staged..."
+    git tag -d stage-$GITSTAGE_NAME 2>/dev/null
+    return 1
+  fi
+  
+  #commit the staged data
+  if [ -f $TOPLEVEL/.git/GITGUI_MSG ] && [ ! -s $TOPLEVEL/.git/GITGUI_MSG ]; then
+    git commit -F $TOPLEVEL/.git/GITGUI_MSG
+    [ $? -ne 0 ] && exit 1
+  else
+    git commit -m "Staging for $GITSTAGE_NAME"
+    [ $? -ne 0 ] && exit 1
+  fi
+  
+  #copy staging msg across if available
+  [ -f $TOPLEVEL/.git/GITGUI_MSG ] && \
+    cp $TOPLEVEL/.git/GITGUI_MSG $TOPLEVEL/.git/gitstages/$GITSTAGE_NAME.msg
+  
+  #tag the staging area
+  git tag -d stage-$GITSTAGE_NAME 2>/dev/null >/dev/null
+  git tag stage-$GITSTAGE_NAME
+  [ $? -ne 0 ] && exit 1
+  
+  #remove git gui messages so we don't get this message for the next time...
+  rm $TOPLEVEL/.git/GITGUI_MSG 2>/dev/null
+}
+
+function switchTo {
+  GITSTAGE_NAME="$1"
+  hasTag $GITSTAGE_NAME
+  if [ $? -ne 0 ]; then
+    #echo "No such staging area: $GITSTAGE_NAME"
+    return 1
+  fi
+  VERSION=$(git rev-list stage-$GITSTAGE_NAME~1..stage-$GITSTAGE_NAME)
+  HEAD=$(git rev-list HEAD~1..HEAD)
+  
+  git rev-list HEAD | grep -E "^$VERSION\$" >/dev/null
+  if [ $? -ne 0 ]; then
+    echo "fatal: Staging area is not on the current branch"
+    exit 1
+  fi
+
+  #get list of revisions to cherry pick  
+  REVS=$(git rev-list $VERSION..HEAD)
+  [ $? -ne 0 ] && exit 1
+  echo -n "Will cherry-pick: "
+  echo $REVS
+  
+  #this is the dangerous bit.... store the head.
+  git rev-list --max-count=1 HEAD >$TOPLEVEL/.git/gitstages/last_head
+  [ $? -ne 0 ] && exit 1
+  
+  #echo "Reseting to before $GITSTAGE_NAME"
+  git stash
+  git reset --hard $VERSION~1 
+  [ $? -ne 0 ] && exit 1
+  
+  for REV in $REVS; do
+    echo "cherry-picking $REV"
+    git cherry-pick $REV
+    [ $? -ne 0 ] && exit 1
+    
+    #re-attach tag...
+    TAG="$(git name-rev $REV --tags 2>/dev/null | awk '{ print $2 }' |sed  's/^tags\///g')"
+    if [[ $TAG == stage-* ]]; then
+      git tag -d $TAG >/dev/null
+      git tag $TAG
+    fi
+  done
+  
+  git stash apply
+  
+  echo "Staging $GITSTAGE_NAME"
+  git cherry-pick -n $VERSION
+  [ $? -ne 0 ] && exit 1
+  
+  #copy the message across
+  cp $TOPLEVEL/.git/gitstages/$GITSTAGE_NAME.msg $TOPLEVEL/.git/GITGUI_MSG 2>/dev/null
+  
+  rm $TOPLEVEL/.git/gitstages/last_head
+}
+
+
+
+if [ "" == "$GITSTAGE_NAME" ]; then
+  displayStages
+else
+  git rev-list HEAD~1 >/dev/null
+  if [ $? -ne 0 ]; then
+    echo "must have at least 2 commits before staging can work"
+    exit 1
+  fi
+
+  #create the gitstages dir
+  mkdir -p $TOPLEVEL/.git/gitstages/
+  [ $? -ne 0 ] && exit 1
+  
+  if [ -f $TOPLEVEL/.git/gitstages/last_head ]; then
+    echo "Last Head file was found. This is probably caused by a serious problem... Suggest you check it out!"
+    echo -n "HEAD version when it went wrong: "
+    cat $TOPLEVEL/.git/gitstages/last_head
+    echo "Try:"
+    echo "  git checkout $(cat $TOPLEVEL/.git/gitstages/last_head) -b new_branch"
+    echo "Remove $TOPLEVEL/.git/gitstages/last_head when you're done"
+    exit 1
+  fi
+  
+  #test that we will be able to use this name
+  STAGENAME_FILE="$TOPLEVEL/.git/gitstages/$GITSTAGE_NAME"
+  if [ "$(basename $STAGENAME_FILE)" != $GITSTAGE_NAME ]; then
+    echo "Invalid staging area name"
+    exit 1
+  fi
+  touch $STAGENAME_FILE.msg 
+  [ $? -ne 0 ] && exit 1
+  
+  #allow staging existing index into a stage
+  git status --porcelain | grep -E '^[A-Z]+' >/dev/null
+  if [ $? -eq 0 ]; then
+    #BUT: don't allow it if there is already an existing stage name
+    hasTag $GITSTAGE_NAME
+    if [ $? -eq 0 ]; then
+      echo "fatal: Staging area $GITSTAGE_NAME already exists... can't use that"
+      exit 1
+    fi
+  fi
+  
+  #switch to the stage if it exists
+  switchTo $GITSTAGE_NAME
+  
+  #show the gui
+  #echo "Running gui..."
+  git gui
+  
+  #store stage if anything is there...
+  storeStaged
+  [ $? -ne 0 ] && exit 1
+fi
+
+
