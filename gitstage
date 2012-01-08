@@ -116,12 +116,21 @@ function switchTo {
   echo -n "Will cherry-pick: "
   echo $REVS
   
+  #check if anything is modified
+  CHANGES=0
+  git status --porcelain |grep -E '^[ A-Z]* '
+  [ $? -eq 0 ] && CHANGES=1
+  
   #this is the dangerous bit.... store the head.
   git rev-list --max-count=1 HEAD >$TOPLEVEL/.git/gitstages/last_head
   [ $? -ne 0 ] && exit 1
   
   #echo "Reseting to before $GITSTAGE_NAME"
-  git stash
+  if [ $CHANGES -eq 1 ]; then
+    git stash > $TOPLEVEL/.git/gitstages/last_stash
+    [ $? -ne 0 ] && exit 1
+  fi
+  
   git reset --hard $VERSION~1 
   [ $? -ne 0 ] && exit 1
   
@@ -138,7 +147,10 @@ function switchTo {
     fi
   done
   
-  git stash apply
+  if [ $CHANGES -eq 1 ]; then
+    git stash apply
+    [ $? -ne 0 ] && exit 1
+  fi
   
   echo "Staging $GITSTAGE_NAME"
   git cherry-pick -n $VERSION
