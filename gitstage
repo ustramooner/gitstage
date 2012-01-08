@@ -159,7 +159,8 @@ function switchTo {
   #copy the message across
   cp $TOPLEVEL/.git/gitstages/$GITSTAGE_NAME.msg $TOPLEVEL/.git/GITGUI_MSG 2>/dev/null
   
-  rm $TOPLEVEL/.git/gitstages/last_head
+  mv $TOPLEVEL/.git/gitstages/last_head $TOPLEVEL/.git/gitstages/last_head.bkup
+  mv $TOPLEVEL/.git/gitstages/last_stash $TOPLEVEL/.git/gitstages/last_stash.bkup
 }
 
 
@@ -181,6 +182,10 @@ else
     echo "Last Head file was found. This is probably caused by a serious problem... Suggest you check it out!"
     echo -n "HEAD version when it went wrong: "
     cat $TOPLEVEL/.git/gitstages/last_head
+    
+    echo -n "Stash info when it went wrong: "
+    cat $TOPLEVEL/.git/gitstages/last_stash
+    
     echo "Try:"
     echo "  git checkout $(cat $TOPLEVEL/.git/gitstages/last_head) -b new_branch"
     echo "Remove $TOPLEVEL/.git/gitstages/last_head when you're done"
